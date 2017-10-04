@@ -22,5 +22,5 @@ Add ``company-graphql`` to allowed ``company-mode`` backends list
 
 
 .. _GraphQL: https://github.com/graphql/
-.. _company-mode: http://company-mode.github.io/
+.. _company-mode: https://github.com/company-mode/company-mode/
 .. _Melpa: http://melpa.milkbox.net/
