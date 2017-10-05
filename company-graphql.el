@@ -27,6 +27,9 @@
 
 (require 'json)
 (require 'subr-x)
+
+(require 's)
+(require 'dash)
 (require 'company)
 
 (defgroup company-graphql nil
@@ -42,6 +45,9 @@
 
 (defvar-local company-graphql-schema-root "__GRAPHQL_SCHEMA_ROOT__"
   "Schema Root.")
+
+(defvar-local company-graphql-schema-args "__GRAPHQL_SCHEMA_ARGS__"
+  "Schema Argument.")
 
 (defvar-local company-graphql-schema-types-cache nil
   "Company Candidates Cache.")
@@ -170,25 +176,49 @@
 ;;	     (company-graphql--schema-type
 ;;	      (company-graphql--schema-types) scope))))
 
+(defun company-graphql--path-lexemify (long-string)
+  "Lexemify sub-expression into partial grammar"
+  (let ((sub-list
+         (-remove
+          (lambda (str) (s-blank? str))
+          (-flatten
+           (mapcar
+            (lambda(x) (if (string-prefix-p "(" x) x (s-split " " (s-replace-all '((":" .  " : ") ("{" . " {")) x))))
+            (mapcar
+             's-trim
+             (-flatten
+              (mapcar
+               (lambda (x) (s-slice-at "(" x))
+               (mapcar
+                's-trim
+                (mapcar 'reverse (reverse (s-slice-at ")" (reverse long-string)))))))))))))
+    (when (not (string-prefix-p "(" (nth 1 (reverse sub-list))))
+      (setq sub-list (reverse (-insert-at 1 nil (reverse sub-list)))))
+    sub-list))
+
 (defun company-graphql--path-names ()
   "path names of query"
   (interactive)
   (save-excursion
-    (let ((type-name "\\([^ \t\n\r\(\{]+\\)[ \t\n\r]*\\(([^\(]+)\\)?[ \t\n\r]*{$")
+    (let ((lexems nil)
 	  (sub-string nil)
 	  (path '())
 	  (last-points '())
-	  (last-substrings '()))    
-      (condition-case nil
-	  (while t
-	    (backward-up-list)
-	    (push (point) last-points))
-	(error (push (car (company-graphql--path-head)) last-substrings)))
+	  (last-substrings '()))
+      (and (not (looking-back ")[ \t\n\r]*"))
+	   (condition-case nil
+	       (while t
+		 (backward-up-list)
+		 (push (point) last-points))
+	     (error (push (car (company-graphql--path-head)) last-substrings))))
       (while (> (cl-list-length last-points) 1)
 	(setq sub-string (buffer-substring-no-properties (1+ (nth 0 last-points)) (1+ (nth 1 last-points))))
 	(setq sub-string (replace-regexp-in-string "\n" "" sub-string))
-	(when (string-match type-name sub-string)
-	  (push (match-string 1 sub-string) last-substrings))
+	(setq lexems (reverse (company-graphql--path-lexemify sub-string)))
+	(when (nth 2 lexems)
+	  (push (nth 2 lexems) last-substrings))
+	(when (string= "(" (nth 0 lexems))
+	  (push company-graphql-schema-args last-substrings))
 	(pop last-points))
       (setq last-substrings (reverse last-substrings))
       last-substrings)))
