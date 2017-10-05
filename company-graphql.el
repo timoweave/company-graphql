@@ -34,47 +34,46 @@
   :tag "company-graphql"
   :group 'company)
 
-(defcustom company-graphql-schema-filename "./schema.json"
-  "Filename that has graphql schema."
-  :type 'file
-  :group 'company-graphql)
+(defvar-local company-graphql-schema-filename nil
+  "Filename that has graphql schema.")
 
-(defcustom company-graphql-schema-server nil
-  "Server endpoint that has graphql __schema."
-  :type 'string
-  :group 'company-graphql)
+(defvar-local company-graphql-schema-server nil
+  "Server endpoint that has graphql __schema.")
 
-(defconst company-graphql-schema-root ""
+(defvar-local company-graphql-schema-root "__GRAPHQL_SCHEMA_ROOT__"
   "Schema Root.")
 
-(defun company-graphql--candidates-parent (items parent)
+(defvar-local company-graphql-schema-types-cache nil
+  "Company Candidates Cache.")
+
+(defun company-graphql--schema-type (items parent)
   "Get hashtables."
   (cl-remove-if-not
    (lambda (item) (string= parent (gethash "name" item)))
    items))
 
-(defun company-graphql--candidates-children-type (item)
+(defun company-graphql--schema-type-field-name (field)
   "Get the type without container [] nor constrianted !."
   (or (and (gethash "type" field)  (gethash "name" (gethash "type" field)))
       (and (gethash "type" field)  (gethash "name" (gethash "ofType" (gethash "type" field))))
       nil))
 
-(defun company-graphql--candidates-children (items)
-  "List of Fields."
+(defun company-graphql--schema-type-fields (items)
+  "List of (Field . Type) Pairs. where Field has :annotation and :meta"
   (let ((fields '())
 	(names '()))
     (dolist (item items)
       (push (gethash "fields" item) fields))
     (dolist (field (car fields))
-      (let* ((name (gethash "name" field))
-	     (annotation (company-graphql--candidates-children-type field))
+      (let* ((text (gethash "name" field))
+	     (annotation (company-graphql--schema-type-field-name field))
 	     (meta "TBD")
-	     )
-	(push (cons (propertize name :annotation annotation :meta meta) annotation) names)))
+	     (name (propertize text :annotation annotation :meta meta)))
+	(push (cons name annotation) names)))
     names))
 
-(defun company-graphql--candidates-visit-dfs (items)
-  "Get List of Fields."
+(defun company-graphql--schema-visit-dfs (items)
+  "Visit the lookup table in DFS manner and print each field."
   (dolist (item items)
     (let ((name (gethash "name" item))
 	  (fields (gethash "fields" item))
@@ -86,13 +85,13 @@
 	   (and field
 		(push (cons
 		       (gethash "name" field)
-		       (company-graphql--candidates-children-type field)) keys)))
+		       (company-graphql--schema-type-field-name field)) keys)))
 	 fields)
 	(setq fields keys))
       (message "parent = %s children = %s" name fields)
       fields)))
 
-(defun company-graphql--candidates-add-subroot (operation-type type name)
+(defun company-graphql--schema-add-subroot (schema type name)
   "Make operation into type."
   (let* ((operation-type (gethash type schema))
 	 (operation (make-hash-table :test 'equal)))
@@ -105,14 +104,14 @@
 	   (puthash "type" operation-type operation)
 	   operation))))
 
-(defun company-graphql--candidates-add-root (schema)
+(defun company-graphql--schema-add-root (schema)
   "Make operation into type."
   (let ((operations '())
-	(query (company-graphql--candidates-add-subroot
+	(query (company-graphql--schema-add-subroot
 		schema "queryType" "query"))
-	(mutation (company-graphql--candidates-add-subroot
+	(mutation (company-graphql--schema-add-subroot
 		   schema "mutationType" "mutation"))
-	(subscription (company-graphql--candidates-add-subroot
+	(subscription (company-graphql--schema-add-subroot
 		       schema "subscriptionType" "subscription")))
     (let ((json-object-type 'hash-table)
 	  (json-array-type 'list)
@@ -125,11 +124,10 @@
       (puthash "fields" operations root)
       root)))
 
-(setq company-graphql--candidates-items-cache nil)
-(defun company-graphql--candidates-items ()
+(defun company-graphql--schema-types ()
   "Parse GraphQL data.__schema.types JSON into hashtable"
-  (or company-graphql--candidates-items-cache
-      (set (make-local-variable 'company-graphql--candidates-items-cache)
+  (or company-graphql-schema-types-cache
+      (set 'company-graphql-schema-types-cache
 	   (let* ((json-object-type 'hash-table)
 		  (json-array-type 'list)
 		  (json-key-type 'string)
@@ -137,18 +135,10 @@
 	     (let* ((data (gethash "data" json))
 		    (schema (gethash "__schema" data))
 		    (types (gethash "types" schema)))
-	       (push (company-graphql--candidates-add-root schema) types)
+	       (push (company-graphql--schema-add-root schema) types)
 	       types)))))
 
-(defun company-graphql--beginning-of-query ()
-  "Move the point to the beginning of the current query."
-  (interactive)
-  (while (and (> (point) (point-min))
-              (or (> (current-indentation) 0)
-                  (> (car (syntax-ppss)) 0)))
-    (forward-line -1)))
-
-(defun company-graphql--path-names-root ()
+(defun company-graphql--path-head ()
   "Path root, query, mutation, subscription, where anynomous is query"
   (interactive)
   (let ((op company-graphql-schema-root)
@@ -174,6 +164,12 @@
       )
     (list op name)))
 
+;;(defun company-graphql--path-tail (scope)
+;;  ""
+;;  (children (company-graphql--schema-type-fields
+;;	     (company-graphql--schema-type
+;;	      (company-graphql--schema-types) scope))))
+
 (defun company-graphql--path-names ()
   "path names of query"
   (interactive)
@@ -187,7 +183,7 @@
 	  (while t
 	    (backward-up-list)
 	    (push (point) last-points))
-	(error (push (car (company-graphql--path-names-root)) last-substrings)))
+	(error (push (car (company-graphql--path-head)) last-substrings)))
       (while (> (cl-list-length last-points) 1)
 	(setq sub-string (buffer-substring-no-properties (1+ (nth 0 last-points)) (1+ (nth 1 last-points))))
 	(setq sub-string (replace-regexp-in-string "\n" "" sub-string))
@@ -197,27 +193,27 @@
       (setq last-substrings (reverse last-substrings))
       last-substrings)))
 
-(defun company-graphql--path-names-zipper (name lookup)
+(defun company-graphql--path-get-type (name lookup)
   "Zip given name with its GraphQL type."
   (let* ((type (cdr (assoc name lookup)))
 	 (ans (cons name type)))
-    (setq lookup (company-graphql--candidates-children
-		  (company-graphql--candidates-parent
-		   (company-graphql--candidates-items) type)))
+    (setq lookup (company-graphql--schema-type-fields
+		  (company-graphql--schema-type
+		   (company-graphql--schema-types) type)))
     (cons ans lookup)))
 
-(defun company-graphql--path-names-types (path-names)
+(defun company-graphql--path-types (&optional path-names)
   "Build name and type pair for a given path."
-  (let ((table (company-graphql--candidates-children
-		(company-graphql--candidates-parent
-		 (company-graphql--candidates-items) "")))
+  (let ((table (company-graphql--schema-type-fields
+		(company-graphql--schema-type
+		 (company-graphql--schema-types) company-graphql-schema-root)))
 	(name-types '()))
     (mapcar
      (lambda(name)
-       (let ((next (company-graphql--path-names-zipper name table)))
+       (let ((next (company-graphql--path-get-type name table)))
 	 (setq table (cdr next))
 	 (car next)))
-     path-names)))
+     (or path-names (company-graphql--path-names)))))
 
 (defun company-graphql--prefix ()
   "Company-GraphQL Prefix."
@@ -236,14 +232,15 @@
   "Company-GraphQL Candidates"
   (let* ((text (substring-no-properties prefix))
 	 (path (company-graphql--path-names))
+	 (tail (cdr (car (reverse (company-graphql--path-types path)))))
 	 (scope (if (string= company-graphql-schema-root (car path))
-		    company-graphql-schema-root (cdr (car (reverse (company-graphql--path-names-types path))))))
-	 (children (company-graphql--candidates-children
-		    (company-graphql--candidates-parent
-		     (company-graphql--candidates-items) scope)))
+		    company-graphql-schema-root tail))
+	 (fields (company-graphql--schema-type-fields
+		  (company-graphql--schema-type
+		   (company-graphql--schema-types) scope)))
 	 (filtered (cl-remove-if-not
 		    (lambda (item) (string-prefix-p text (car item)))
-		    children))
+		    fields))
 	 (answer (cl-mapcar (lambda (x) (car x)) filtered)))
     answer))
 
