@@ -37,7 +37,7 @@
   :tag "company-graphql"
   :group 'company)
 
-(defvar-local company-graphql-schema-filename nil
+(defvar-local company-graphql-schema-filename "./schema.json"
   "Filename that has graphql schema.")
 
 (defvar-local company-graphql-schema-server nil
@@ -52,11 +52,35 @@
 (defvar-local company-graphql-schema-types-cache nil
   "Company Candidates Cache.")
 
-(defun company-graphql--schema-type (items parent)
+(defun company-graphql--schema-json-print (hashtable &optional buffer-name)
+  "Debug json"
+  (and hashtable
+       (with-current-buffer (get-buffer-create (or buffer-name "*company-graphql*"))
+	 (erase-buffer)
+	 (json-mode)
+	 (ignore-errors
+	   (insert (json-encode hashtable))
+	   (replace-string ":" ": " nil (point-min) (point-max))	
+	   (replace-string "{\"" "{\n\"" nil (point-min) (point-max))
+	   (replace-string "[{" "[\n{" nil (point-min) (point-max))
+	   (replace-string ",\"" ",\n\"" nil (point-min) (point-max))
+	   (replace-string "\"}" "\"\n}" nil (point-min) (point-max))
+	   (replace-string "}]" "}\n]" nil (point-min) (point-max))
+	   (replace-string "]}" "]\n}" nil (point-min) (point-max))
+	   (replace-string "},{" "},\n{" nil (point-min) (point-max))
+	   (replace-string "}}}" "}\n}\n}" nil (point-min) (point-max))
+	   (replace-string "}}" "}\n}" nil (point-min) (point-max))
+	   (indent-region (point-min) (point-max))))))
+
+(defun company-graphql--schema-type (hashtables parent)
   "Get hashtables."
-  (cl-remove-if-not
-   (lambda (item) (string= parent (gethash "name" item)))
-   items))
+  (let ((type (cl-find-if
+	       (lambda (hashtable)
+		 (let ((name (gethash "name" hashtable)))
+		   (message (format "search for %s, look at %s" parent name))
+		   (string= parent name)))
+	       hashtables)))
+    type))
 
 (defun company-graphql--schema-type-field-name (field)
   "Get the type without container [] nor constrianted !."
@@ -131,9 +155,10 @@
       root)))
 
 
-(defun company-graphql--schema-add-leaves (types type)
-  ""
-  (let  ((type-def (car (company-graphql--schema-type types type))))
+(defun company-graphql--schema-add-arg-detail (schema type)
+  "Add args detail"
+  (let* ((types (gethash "types" schema))
+	 (type-def (company-graphql--schema-type types type)))
     (and type-def
 	 (let* ((type-fields (gethash "fields" type-def))
 		(type-args (mapcar
@@ -147,18 +172,24 @@
 		)
 	   type-args))))
 
-(defun company-graphql--schema-add-args (types)
-  ""
-  (let ((query (company-graphql--schema-add-leaves types "Query"))
-	(mutation (company-graphql--schema-add-leaves types "Mutation"))
-	(subscription (company-graphql--schema-add-leaves types "Subscription")))
+(defun company-graphql--schema-add-arg-list (schema)
+  "Add Query, Mutation, Subscription args."
+  (let ((query (company-graphql--schema-add-arg-detail schema "Query"))
+	(mutation (company-graphql--schema-add-arg-detail schema "Mutation"))
+	(subscription (company-graphql--schema-add-arg-detail schema "Subscription"))
+	(types (gethash "types" schema)))
     (when query
-      (mapcar (lambda(x) (push x types)) query))
+      (mapcar (lambda(x) (push x types)) query)
+      (puthash "types" types schema))
     (when mutation
-      (mapcar (lambda(x) (push x types)) mutation))
+      (mapcar (lambda(x) (push x types)) mutation)
+      (puthash "types" types schema))
     (when subscription
-      (mapcar (lambda(x) (push x types)) subscription))
-    types))
+      (mapcar (lambda(x) (push x types)) subscription)
+      (puthash "types" types schema))
+    types
+    )
+  )
 
 (defun company-graphql--schema-types ()
   "Parse GraphQL data.__schema.types JSON into hashtable"
@@ -170,9 +201,12 @@
 		  (json (json-read-file company-graphql-schema-filename)))
 	     (let* ((data (gethash "data" json))
 		    (schema (gethash "__schema" data))
-		    (types (gethash "types" schema)))
-	       (push (company-graphql--schema-add-root schema) types)
-	       ;;(push (company-graphql--schema-add-args schema) types)
+		    (types (gethash "types" schema))
+		    (root (company-graphql--schema-add-root schema))
+		    (args (company-graphql--schema-add-arg-list schema))
+		    )
+	       (push root types)
+	       (mapcar (lambda (arg) (push arg types)) args)
 	       types)))))
 
 (defun company-graphql--path-head ()
