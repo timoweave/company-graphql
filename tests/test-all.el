@@ -51,6 +51,27 @@
 	   '(("query" . "Query")  ("onePost" . "Post") ("tags" . "Tag"))))
  )
 
+(describe
+ "path types with args"
+ (it "find \"query\" \"onePost\""
+   (expect (test-path-types (list "query" "onePost" (test-name-arg "onePost")))
+	   :to-have-same-items-as
+	   (list (cons "query" "Query") (cons "onePost" "Post") (test-name-arg-pair "onePost"))))
+ ;; (it "find \"query\" \"onePost\" \"tags\""d
+ ;;   (expect (test-path-types '("query" "onePost" "tags"))
+ ;; 	   :to-have-same-items-as
+ ;; 	   '(("query" . "Query")  ("onePost" . "Post") ("tags" . "Tag") ("tags.args"))))
+ )
+
+(defun test-name-arg (name)
+  "Return the made-up name.args"
+  (format "%s.%s" name company-graphql-schema-args))
+
+(defun test-name-arg-pair (name)
+  "Return the made-up (name.args . name.args)"
+  (let ((name-arg (test-name-arg name)))
+    (cons name-arg name-arg)))
+
 (defun test-path-types (paths &optional schema-filename)
   "Testing company-graphql--path-types"
   (let ((company-graphql-schema-filename (or schema-filename "./schema.json")))

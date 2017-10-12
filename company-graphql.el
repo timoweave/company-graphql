@@ -37,7 +37,7 @@
   :tag "company-graphql"
   :group 'company)
 
-(defvar-local company-graphql-schema-filename "./schema.json"
+(defvar-local company-graphql-schema-filename nil
   "Filename that has graphql schema.")
 
 (defvar-local company-graphql-schema-server nil
@@ -52,7 +52,7 @@
 (defvar-local company-graphql-schema-types-cache nil
   "Company Candidates Cache.")
 
-(defun company-graphql--schema-json-print (hashtable &optional buffer-name)
+(defun company-graphql--jsonify-hashtable (hashtable &optional buffer-name)
   "Debug json"
   (and hashtable
        (with-current-buffer (get-buffer-create (or buffer-name "*company-graphql*"))
@@ -60,16 +60,12 @@
 	 (json-mode)
 	 (ignore-errors
 	   (insert (json-encode hashtable))
-	   (replace-string ":" ": " nil (point-min) (point-max))	
-	   (replace-string "{\"" "{\n\"" nil (point-min) (point-max))
-	   (replace-string "[{" "[\n{" nil (point-min) (point-max))
-	   (replace-string ",\"" ",\n\"" nil (point-min) (point-max))
-	   (replace-string "\"}" "\"\n}" nil (point-min) (point-max))
-	   (replace-string "}]" "}\n]" nil (point-min) (point-max))
-	   (replace-string "]}" "]\n}" nil (point-min) (point-max))
-	   (replace-string "},{" "},\n{" nil (point-min) (point-max))
-	   (replace-string "}}}" "}\n}\n}" nil (point-min) (point-max))
-	   (replace-string "}}" "}\n}" nil (point-min) (point-max))
+	   (replace-string ":" ": " nil (point-min) (point-max))
+	   (replace-string "," ",\n" nil (point-min) (point-max))
+	   (replace-string "{" "{\n" nil (point-min) (point-max))
+	   (replace-string "}" "\n}" nil (point-min) (point-max))
+	   (replace-string "[" "[\n" nil (point-min) (point-max))
+	   (replace-string "]" "\n]" nil (point-min) (point-max))
 	   (indent-region (point-min) (point-max))))))
 
 (defun company-graphql--schema-type (hashtables parent)
@@ -77,7 +73,6 @@
   (let ((type (cl-find-if
 	       (lambda (hashtable)
 		 (let ((name (gethash "name" hashtable)))
-		   (message (format "search for %s, look at %s" parent name))
 		   (string= parent name)))
 	       hashtables)))
     type))
@@ -88,12 +83,11 @@
       (and (gethash "type" field)  (gethash "name" (gethash "ofType" (gethash "type" field))))
       nil))
 
-(defun company-graphql--schema-type-fields (items)
+(defun company-graphql--schema-type-fields (hashtable)
   "List of (Field . Type) Pairs. where Field has :annotation and :meta"
   (let ((fields '())
 	(names '()))
-    (dolist (item items)
-      (push (gethash "fields" item) fields))
+    (push (gethash "fields" hashtable) fields)
     (dolist (field (car fields))
       (let* ((text (gethash "name" field))
 	     (annotation (company-graphql--schema-type-field-name field))
@@ -118,7 +112,6 @@
 		       (company-graphql--schema-type-field-name field)) keys)))
 	 fields)
 	(setq fields keys))
-      (message "parent = %s children = %s" name fields)
       fields)))
 
 (defun company-graphql--schema-add-subroot (schema type name)
@@ -162,7 +155,8 @@
     (and type-def
 	 (let* ((type-fields (gethash "fields" type-def))
 		(type-args (mapcar
-			    (lambda (type) (let ((name (format "%s.args" (gethash "name" type)))
+			    (lambda (type) (let ((name (format "%s.%s" (gethash "name" type)
+							       company-graphql-schema-args))
 						 (fields (gethash "args" type))
 						 (type-arg (make-hash-table :test 'equal)))
 					     (puthash "name" name type-arg)
@@ -211,7 +205,6 @@
 
 (defun company-graphql--path-head ()
   "Path root, query, mutation, subscription, where anynomous is query"
-  (interactive)
   (let ((op company-graphql-schema-root)
 	(name nil)
 	(begin (point))
@@ -234,12 +227,6 @@
 	(error nil))
       )
     (list op name)))
-
-;;(defun company-graphql--path-tail (scope)
-;;  ""
-;;  (children (company-graphql--schema-type-fields
-;;	     (company-graphql--schema-type
-;;	      (company-graphql--schema-types) scope))))
 
 (defun company-graphql--path-lexemify (long-string)
   "Lexemify sub-expression into partial grammar"
@@ -269,8 +256,7 @@
     (or root company-graphql-schema-root))))
 
 (defun company-graphql--path-names ()
-  "path names of query"
-  (interactive)
+  "Get path names of query/mutation/subscription."
   (save-excursion
     (let ((lexems nil)
 	  (sub-string nil)
@@ -290,14 +276,15 @@
 	(when (nth 2 lexems)
 	  (push (nth 2 lexems) last-substrings))
 	(when (string= "(" (nth 0 lexems))
-	  (push (format "%s.%s" (nth 2 lexems) "args") last-substrings))
+	  (push (format "%s.%s" (nth 2 lexems) company-graphql-schema-args) last-substrings))
 	(pop last-points))
       (setq last-substrings (reverse last-substrings))
       last-substrings)))
 
 (defun company-graphql--path-get-type (name lookup)
   "Zip given name with its GraphQL type."
-  (let* ((type (cdr (assoc name lookup)))
+  (let* ((type (or (cdr (assoc name lookup))
+		   (and (string-match (format "\.%s$" company-graphql-schema-args) name) name)))
 	 (ans (cons name type)))
     (setq lookup (company-graphql--schema-hashtable type))
     (cons ans lookup)))
@@ -305,7 +292,8 @@
 (defun company-graphql--path-types (&optional path-names)
   "Build name and type pair for a given path."
   (let ((table (company-graphql--schema-hashtable))
-	(name-types '()))
+	(name-types '())
+	(path (or path-names (company-graphql--path-names))))
     (mapcar
      (lambda(name)
        (let ((next (company-graphql--path-get-type name table)))
@@ -313,7 +301,7 @@
 	 (if (null table)
 	     (cons (car (car next)) (car (car next)))
 	   (car next))))
-     (or path-names (company-graphql--path-names)))))
+     path)))
 
 (defun company-graphql--prefix ()
   "Company-GraphQL Prefix."
