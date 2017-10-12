@@ -130,6 +130,36 @@
       (puthash "fields" operations root)
       root)))
 
+
+(defun company-graphql--schema-add-leaves (types type)
+  ""
+  (let  ((type-def (car (company-graphql--schema-type types type))))
+    (and type-def
+	 (let* ((type-fields (gethash "fields" type-def))
+		(type-args (mapcar
+			    (lambda (type) (let ((name (format "%s.args" (gethash "name" type)))
+						 (fields (gethash "args" type))
+						 (type-arg (make-hash-table :test 'equal)))
+					     (puthash "name" name type-arg)
+					     (puthash "fields" fields type-arg)
+					     type-arg))
+			    type-fields))
+		)
+	   type-args))))
+
+(defun company-graphql--schema-add-args (types)
+  ""
+  (let ((query (company-graphql--schema-add-leaves types "Query"))
+	(mutation (company-graphql--schema-add-leaves types "Mutation"))
+	(subscription (company-graphql--schema-add-leaves types "Subscription")))
+    (when query
+      (mapcar (lambda(x) (push x types)) query))
+    (when mutation
+      (mapcar (lambda(x) (push x types)) mutation))
+    (when subscription
+      (mapcar (lambda(x) (push x types)) subscription))
+    types))
+
 (defun company-graphql--schema-types ()
   "Parse GraphQL data.__schema.types JSON into hashtable"
   (or company-graphql-schema-types-cache
@@ -142,6 +172,7 @@
 		    (schema (gethash "__schema" data))
 		    (types (gethash "types" schema)))
 	       (push (company-graphql--schema-add-root schema) types)
+	       ;;(push (company-graphql--schema-add-args schema) types)
 	       types)))))
 
 (defun company-graphql--path-head ()
@@ -196,6 +227,13 @@
       (setq sub-list (reverse (-insert-at 1 nil (reverse sub-list)))))
     sub-list))
 
+(defun company-graphql--schema-hashtable (&optional root)
+  "Get GraphQL schema fields hashtable."
+  (company-graphql--schema-type-fields
+   (company-graphql--schema-type
+    (company-graphql--schema-types)
+    (or root company-graphql-schema-root))))
+
 (defun company-graphql--path-names ()
   "path names of query"
   (interactive)
@@ -213,12 +251,12 @@
 	     (error (push (car (company-graphql--path-head)) last-substrings))))
       (while (> (cl-list-length last-points) 1)
 	(setq sub-string (buffer-substring-no-properties (1+ (nth 0 last-points)) (1+ (nth 1 last-points))))
-	(setq sub-string (replace-regexp-in-string "\n" "" sub-string))
+	(setq sub-string (replace-regexp-in-string "[ \n\t]+" " " sub-string))	
 	(setq lexems (reverse (company-graphql--path-lexemify sub-string)))
 	(when (nth 2 lexems)
 	  (push (nth 2 lexems) last-substrings))
 	(when (string= "(" (nth 0 lexems))
-	  (push company-graphql-schema-args last-substrings))
+	  (push (format "%s.%s" (nth 2 lexems) "args") last-substrings))
 	(pop last-points))
       (setq last-substrings (reverse last-substrings))
       last-substrings)))
@@ -227,22 +265,20 @@
   "Zip given name with its GraphQL type."
   (let* ((type (cdr (assoc name lookup)))
 	 (ans (cons name type)))
-    (setq lookup (company-graphql--schema-type-fields
-		  (company-graphql--schema-type
-		   (company-graphql--schema-types) type)))
+    (setq lookup (company-graphql--schema-hashtable type))
     (cons ans lookup)))
 
 (defun company-graphql--path-types (&optional path-names)
   "Build name and type pair for a given path."
-  (let ((table (company-graphql--schema-type-fields
-		(company-graphql--schema-type
-		 (company-graphql--schema-types) company-graphql-schema-root)))
+  (let ((table (company-graphql--schema-hashtable))
 	(name-types '()))
     (mapcar
      (lambda(name)
        (let ((next (company-graphql--path-get-type name table)))
 	 (setq table (cdr next))
-	 (car next)))
+	 (if (null table)
+	     (cons (car (car next)) (car (car next)))
+	   (car next))))
      (or path-names (company-graphql--path-names)))))
 
 (defun company-graphql--prefix ()
@@ -265,9 +301,7 @@
 	 (tail (cdr (car (reverse (company-graphql--path-types path)))))
 	 (scope (if (string= company-graphql-schema-root (car path))
 		    company-graphql-schema-root tail))
-	 (fields (company-graphql--schema-type-fields
-		  (company-graphql--schema-type
-		   (company-graphql--schema-types) scope)))
+	 (fields (company-graphql--schema-hashtable scope))
 	 (filtered (cl-remove-if-not
 		    (lambda (item) (string-prefix-p text (car item)))
 		    fields))
