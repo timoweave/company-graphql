@@ -37,17 +37,17 @@
   :tag "company-graphql"
   :group 'company)
 
+(defconst company-graphql-schema-root "__GRAPHQL_SCHEMA_ROOT__"
+  "Schema Root.")
+
+(defconst company-graphql-schema-args "__GRAPHQL_SCHEMA_ARGS__"
+  "Schema Argument.")
+
 (defvar-local company-graphql-schema-filename nil
   "Filename that has graphql schema.")
 
 (defvar-local company-graphql-schema-server nil
   "Server endpoint that has graphql __schema.")
-
-(defvar-local company-graphql-schema-root "__GRAPHQL_SCHEMA_ROOT__"
-  "Schema Root.")
-
-(defvar-local company-graphql-schema-args "__GRAPHQL_SCHEMA_ARGS__"
-  "Schema Argument.")
 
 (defvar-local company-graphql-schema-types-cache nil
   "Company Candidates Cache.")
@@ -147,6 +147,9 @@
       (puthash "fields" operations root)
       root)))
 
+(defun company-graphql--schema-name-arg (name)
+  "Return a name.arg string"
+  (format "%s.%s" name company-graphql-schema-args))
 
 (defun company-graphql--schema-add-arg-detail (schema type)
   "Add args detail"
@@ -155,8 +158,7 @@
     (and type-def
 	 (let* ((type-fields (gethash "fields" type-def))
 		(type-args (mapcar
-			    (lambda (type) (let ((name (format "%s.%s" (gethash "name" type)
-							       company-graphql-schema-args))
+			    (lambda (type) (let ((name (company-graphql--schema-name-arg (gethash "name" type)))
 						 (fields (gethash "args" type))
 						 (type-arg (make-hash-table :test 'equal)))
 					     (puthash "name" name type-arg)
@@ -276,7 +278,7 @@
 	(when (nth 2 lexems)
 	  (push (nth 2 lexems) last-substrings))
 	(when (string= "(" (nth 0 lexems))
-	  (push (format "%s.%s" (nth 2 lexems) company-graphql-schema-args) last-substrings))
+	  (push (company-graphql--schema-name-arg (nth 2 lexems)) last-substrings))
 	(pop last-points))
       (setq last-substrings (reverse last-substrings))
       last-substrings)))
@@ -284,7 +286,7 @@
 (defun company-graphql--path-get-type (name lookup)
   "Zip given name with its GraphQL type."
   (let* ((type (or (cdr (assoc name lookup))
-		   (and (string-match (format "\.%s$" company-graphql-schema-args) name) name)))
+		   (and (string-suffix-p company-graphql-schema-args name) name)))
 	 (ans (cons name type)))
     (setq lookup (company-graphql--schema-hashtable type))
     (cons ans lookup)))
