@@ -154,19 +154,17 @@
 (defun company-graphql--schema-add-arg-detail (schema type)
   "Add args detail"
   (let* ((types (gethash "types" schema))
-	 (type-def (company-graphql--schema-type types type)))
-    (and type-def
-	 (let* ((type-fields (gethash "fields" type-def))
-		(type-args (mapcar
-			    (lambda (type) (let ((name (company-graphql--schema-name-arg (gethash "name" type)))
-						 (fields (gethash "args" type))
-						 (type-arg (make-hash-table :test 'equal)))
-					     (puthash "name" name type-arg)
-					     (puthash "fields" fields type-arg)
-					     type-arg))
-			    type-fields))
-		)
-	   type-args))))
+	 (type-def (company-graphql--schema-type types type))
+	 (type-fields (and type-def (gethash "fields" type-def))))
+    (mapcar
+     (lambda (type)
+       (let ((name (company-graphql--schema-name-arg (gethash "name" type)))
+	     (fields (gethash "args" type))
+	     (type-arg (make-hash-table :test 'equal)))
+	 (puthash "name" name type-arg)
+	 (puthash "fields" fields type-arg)
+	 type-arg))
+     type-fields)))
 
 (defun company-graphql--schema-add-arg-list (schema)
   "Add Query, Mutation, Subscription args."
@@ -220,13 +218,12 @@
 	    (forward-char)
 	    (setq begin (point)))
 	(error (progn (setq begin (point-min)))))
-      (condition-case nil
-	  (progn
-	    (setq sub-string (buffer-substring-no-properties begin end))
-	    (when (string-match op-name sub-string)
-	      (setq op (match-string 1 sub-string))
-	      (setq name (match-string 2 sub-string))))
-	(error nil))
+      (ignore-errors
+	(progn
+	  (setq sub-string (buffer-substring-no-properties begin end))
+	  (when (string-match op-name sub-string)
+	    (setq op (match-string 1 sub-string))
+	    (setq name (match-string 2 sub-string)))))
       )
     (list op name)))
 
