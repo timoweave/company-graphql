@@ -4,7 +4,7 @@
 
 ;; Author: Timothy Shiu <timoweave@gmail.com>
 ;; Keywords: company graphql completion
-;; Package-Requires: ((emacs "25.2.1") (company "0.9.4"))
+;; Package-Requires: ((emacs "25.2.1") (company "0.9.4") (request "20170131.1747"))
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -30,6 +30,7 @@
 
 (require 's)
 (require 'dash)
+(require 'request)
 (require 'company)
 
 (defgroup company-graphql nil
@@ -43,30 +44,171 @@
 (defconst company-graphql-schema-args "__GRAPHQL_SCHEMA_ARGS__"
   "Schema Argument.")
 
-(defvar-local company-graphql-schema-filename nil
-  "Filename that has graphql schema.")
+(defconst company-graphql-schema-introspect-buffer "*company-graphql-introspection*"
+  "Schema Argument.")
 
-(defvar-local company-graphql-schema-server nil
-  "Server endpoint that has graphql __schema.")
+(defconst company-graphql-temp-buffer "*company-graphql*"
+  "Schema Argument.")
+
+(defconst company-graphql-schema-introspect-query "
+    query IntrospectionQuery {
+      __schema {
+        queryType {
+           name
+        }
+        mutationType {
+            name
+        }
+        subscriptionType {
+            name
+        }
+        types {
+            ...FullType
+        }
+        directives {
+            name
+            description
+            locations
+            args {
+              ...InputValue
+            }
+        }
+      }
+  }
+
+  fragment FullType on __Type {
+      kind
+      name
+      description
+      fields(includeDeprecated: true) {
+        name
+        description
+        args {
+            ...InputValue
+        }
+        type {
+            ...TypeRef
+        }
+        isDeprecated
+        deprecationReason
+      }
+      inputFields {
+        ...InputValue
+      }
+      interfaces {
+        ...TypeRef
+      }
+      enumValues(includeDeprecated: true) {
+        name
+        description
+        isDeprecated
+        deprecationReason
+      }
+      possibleTypes {
+        ...TypeRef
+      }
+  }
+
+  fragment InputValue on __InputValue {
+      name
+      description
+      type {
+        ...TypeRef
+      }
+      defaultValue
+  }
+
+  fragment TypeRef on __Type {
+      kind
+      name
+      ofType {
+        kind
+        name
+        ofType {
+            kind
+            name
+            ofType {
+              kind
+              name
+              ofType {
+                  kind
+                  name
+                  ofType {
+                    kind
+                    name
+                    ofType {
+                        kind
+                        name
+                        ofType {
+                          kind
+                          name
+                        }
+                    }
+                  }
+              }
+            }
+        }
+      }
+  }"
+  "Introspection query to the graphql server")
 
 (defvar-local company-graphql-schema-types-cache nil
   "Company Candidates Cache.")
 
-(defun company-graphql-jsonify-hashtable (hashtable &optional buffer-name)
+(defvar-local company-graphql-schema-url nil
+  "URL address of the graphql server, which will to __schema introspection.")
+
+(defun company-graphql-init ()
+  "Init Setting for GraphQL server"
+  (interactive)
+  (setq company-graphql-schema-types-cache nil)
+  (setq company-graphql-schema-url (read-string "GraphQL URL: "))
+  (company-graphql-introspection)
+  (company-graphql-schema-types)
+  )
+
+(defun company-graphql-introspection ()
+  "Setup company graphql mode with server url, introspection graphql, and json schema."
+  (let* ((query-operation-spec company-graphql-schema-introspect-query)
+	 (query-operation-name nil)
+	 (query-variables nil)
+	 (request-list (list (cons 'query query-operation-spec)
+			     (cons 'operationName query-operation-name)
+			     (cons 'variables query-variables)))
+	 (response-buffer company-graphql-schema-introspect-buffer)
+	 (response-complete
+	  '(lambda (&rest _)
+	     (message (format "%s%s" company-graphql-schema-url
+			      (if (and (not (null query-operation-name))
+				       (not (string-equal query-operation-name "")))
+				  (format "?operationName=%s" query-operation-name)
+				"")))))
+	 (response-result
+	  (request company-graphql-schema-url
+		   :type "POST"
+		   :params request-list
+		   :data (json-encode request-list)
+		   :headers '(("Content-Type" . "application/json"))
+		   :parser 'json-read
+		   :sync t
+		   :complete response-complete
+		   ))
+	 (response-body (request-response-data response-result)))
+    (company-graphql-jsonify-hashtable response-body response-buffer)
+    (message response-buffer)))
+
+(defun company-graphql-jsonify-hashtable (&optional hashtable buffer-name)
   "Debug json"
-  (and hashtable
-       (with-current-buffer (get-buffer-create (or buffer-name "*company-graphql*"))
-	 (erase-buffer)
-	 (json-mode)
-	 (ignore-errors
-	   (insert (json-encode hashtable))
-	   (replace-string ":" ": " nil (point-min) (point-max))
-	   (replace-string "," ",\n" nil (point-min) (point-max))
-	   (replace-string "{" "{\n" nil (point-min) (point-max))
-	   (replace-string "}" "\n}" nil (point-min) (point-max))
-	   (replace-string "[" "[\n" nil (point-min) (point-max))
-	   (replace-string "]" "\n]" nil (point-min) (point-max))
-	   (indent-region (point-min) (point-max))))))
+  (let ((table (or hashtable company-graphql-schema-types-cache))
+	(buffer (or buffer-name company-graphql-temp-buffer)))
+    (and table
+	 (with-current-buffer (get-buffer-create buffer)
+	   (erase-buffer)
+	   (json-mode)
+	   (ignore-errors
+	     (insert (json-encode table))
+	     (json-pretty-print-buffer)
+	     )))))
 
 (defun company-graphql-schema-type (hashtables parent)
   "Get hashtables."
@@ -192,7 +334,9 @@
 	   (let* ((json-object-type 'hash-table)
 		  (json-array-type 'list)
 		  (json-key-type 'string)
-		  (json (json-read-file company-graphql-schema-filename)))
+		  (json (json-read-from-string
+			 (with-current-buffer company-graphql-schema-introspect-buffer
+			   (buffer-substring-no-properties (point-min) (point-max))))))
 	     (let* ((data (gethash "data" json))
 		    (schema (gethash "__schema" data))
 		    (types (gethash "types" schema))
@@ -270,7 +414,7 @@
 	     (error (push (car (company-graphql-path-head)) last-substrings))))
       (while (> (cl-list-length last-points) 1)
 	(setq sub-string (buffer-substring-no-properties (1+ (nth 0 last-points)) (1+ (nth 1 last-points))))
-	(setq sub-string (replace-regexp-in-string "[ \n\t]+" " " sub-string))	
+	(setq sub-string (replace-regexp-in-string "[ \n\t]+" " " sub-string))
 	(setq lexems (reverse (company-graphql-path-lexemify sub-string)))
 	(when (nth 2 lexems)
 	  (push (nth 2 lexems) last-substrings))
