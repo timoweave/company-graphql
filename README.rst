@@ -11,6 +11,11 @@ GraphQL_ backend for company-mode_.
 .. 
 ..     M-x package-install RET company-graphql RET
 
+Screen Shot
+-----------
+.. image:: misc/demo5.gif
+
+
 Usage
 -----
 

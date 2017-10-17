@@ -81,9 +81,6 @@
 	))
     (company-graphql-path-types paths)))
 
-(test-path-types '("query"))
-;;(test-path-types "query")
-
 (defun test-path-names (content &optional buffer-name)
   "Testing company-graphql-path-names"
   (let ((test-buffer (or buffer-name "*tests*")))
