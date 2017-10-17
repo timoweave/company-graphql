@@ -44,128 +44,46 @@
 (defconst company-graphql-schema-args "__GRAPHQL_SCHEMA_ARGS__"
   "Schema Argument.")
 
-(defconst company-graphql-schema-introspect-buffer "*company-graphql-introspection*"
-  "Schema Argument.")
+(defconst company-graphql-schema-introspect-buffer "*Company-GraphQL-Introspection*"
+  "Introspection Buffer.")
 
-(defconst company-graphql-temp-buffer "*company-graphql*"
-  "Schema Argument.")
+(defconst company-graphql-file-name-base (file-name-directory load-file-name)
+  "Package basename for expand-file-name.")
 
-(defconst company-graphql-schema-introspect-query "
-    query IntrospectionQuery {
-      __schema {
-        queryType {
-           name
-        }
-        mutationType {
-            name
-        }
-        subscriptionType {
-            name
-        }
-        types {
-            ...FullType
-        }
-        directives {
-            name
-            description
-            locations
-            args {
-              ...InputValue
-            }
-        }
-      }
-  }
+(defconst company-graphql-temp-buffer "*Company-GraphQL-Temp*"
+  "Temporary Buffer for various operations.")
 
-  fragment FullType on __Type {
-      kind
-      name
-      description
-      fields(includeDeprecated: true) {
-        name
-        description
-        args {
-            ...InputValue
-        }
-        type {
-            ...TypeRef
-        }
-        isDeprecated
-        deprecationReason
-      }
-      inputFields {
-        ...InputValue
-      }
-      interfaces {
-        ...TypeRef
-      }
-      enumValues(includeDeprecated: true) {
-        name
-        description
-        isDeprecated
-        deprecationReason
-      }
-      possibleTypes {
-        ...TypeRef
-      }
-  }
-
-  fragment InputValue on __InputValue {
-      name
-      description
-      type {
-        ...TypeRef
-      }
-      defaultValue
-  }
-
-  fragment TypeRef on __Type {
-      kind
-      name
-      ofType {
-        kind
-        name
-        ofType {
-            kind
-            name
-            ofType {
-              kind
-              name
-              ofType {
-                  kind
-                  name
-                  ofType {
-                    kind
-                    name
-                    ofType {
-                        kind
-                        name
-                        ofType {
-                          kind
-                          name
-                        }
-                    }
-                  }
-              }
-            }
-        }
-      }
-  }"
-  "Introspection query to the graphql server")
-
-(defvar-local company-graphql-schema-types-cache nil
-  "Company Candidates Cache.")
+(defvar-local company-graphql-schema-introspect-query nil
+  "Introspection query to the graphql server.")
 
 (defvar-local company-graphql-schema-url nil
   "URL address of the graphql server, which will to __schema introspection.")
 
+(defvar-local company-graphql-schema-types-cache nil
+  "Company Candidates Cache.")
+
+(defun company-graphql-file-name (file)
+  "Read file inside the package"
+  (expand-file-name file company-graphql-file-name-base))
+
 (defun company-graphql-init ()
   "Init Setting for GraphQL server"
   (interactive)
-  (setq company-graphql-schema-types-cache nil)
-  (setq company-graphql-schema-url (read-string "GraphQL URL: "))
-  (company-graphql-introspection)
-  (company-graphql-schema-types)
-  )
+  (or company-graphql-schema-types-cache
+      (progn
+	(setq company-graphql-schema-introspect-query (company-graphql-schema-introspect-content))
+	(setq company-graphql-schema-types-cache nil)
+	(setq company-graphql-schema-url (read-string "GraphQL URL: "))
+	(company-graphql-introspection)
+	(company-graphql-schema-types)
+	t)))
+
+(defun company-graphql-schema-introspect-content ()
+  "Read the content of introspection graphql file"
+  (with-temp-buffer
+    ;;(replace-regexp-in-string "[^/]+$" "introspection.graphql" (expand-file-name "./company-grahql.el"))
+    (insert-file-contents (company-graphql-file-name "introspection.graphql"))
+      (buffer-string)))
 
 (defun company-graphql-introspection ()
   "Setup company graphql mode with server url, introspection graphql, and json schema."
@@ -476,14 +394,16 @@
 (defun company-graphql (command &optional arg &rest ignored)
   "Company-GraphQL entry command."
   (interactive (list 'interactive))
-  (cl-case command
-    (interactive (company-begin-backend 'company-graphql))
-    (prefix (company-graphql-prefix))
-    (candidates (company-graphql-candidates arg))
-    (annotation (company-graphql-annotation arg))
-    (meta (company-graphql-meta arg))
-    (ignore-case t)
-    (no-cache t)))
+  (and (company-graphql-init)
+       (not (null company-graphql-schema-types-cache))
+       (cl-case command
+	 (interactive (company-begin-backend 'company-graphql))
+	 (prefix (company-graphql-prefix))
+	 (candidates (company-graphql-candidates arg))
+	 (annotation (company-graphql-annotation arg))
+	 (meta (company-graphql-meta arg))
+	 (ignore-case t)
+	 (no-cache t))))
 
 (provide 'company-graphql)
 ;;; company-graphql.el ends here
