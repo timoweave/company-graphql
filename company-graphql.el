@@ -1,10 +1,12 @@
-;;; company-graphql.el --- completion for graphql file                     -*- lexical-binding: t; -*-
+;;; company-graphql.el --- company completion for graphql file                     -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2017  Timothy Shiu
+;; Copyright (C) 2017 Timothy Shiu
 
 ;; Author: Timothy Shiu <timoweave@gmail.com>
-;; Keywords: company graphql completion
-;; Package-Requires: ((emacs "25.2.1") (company "0.9.4") (request "20170131.1747"))
+;; Version: 0.1.0
+;; Keywords: company, graphql, completion, introspection
+;; URL: https://github.com/timoweave/company-graphql
+;; Package-Requires: ((emacs "25.2.1") (cl-lib "0.5.0") (dash "2.13.0") (s "1.19.0") (company "0.9.4") (request "0.3.0") (graphql-mode "20170929.4"))
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -21,17 +23,26 @@
 
 ;;; Commentary:
 
+;; This Emacs package provides completion for GraphQL file with your
+;; GraphQL server, which host the GraphQL DSL and allow
+;; introspection.
+
+;; The type, fields, argument definition lookup process is relied on
+;; the instrospection specified in `introspection.graphql` graphql
+;; query file, which is used to get json response from the
+;; server.  Once the JSON response is received, it builds a hashtable,
+;; which is futher augmented to help faster definition lookup.
+
 ;; Read README for more details.
 
 ;;; Code:
 
-(require 'json)
-(require 'subr-x)
-
+(require 'cl-lib)
 (require 's)
 (require 'dash)
 (require 'request)
 (require 'company)
+(require 'graphql-mode)
 
 (defgroup company-graphql nil
   "Completion backends for commit templates."
@@ -44,128 +55,46 @@
 (defconst company-graphql-schema-args "__GRAPHQL_SCHEMA_ARGS__"
   "Schema Argument.")
 
-(defconst company-graphql-schema-introspect-buffer "*company-graphql-introspection*"
-  "Schema Argument.")
+(defconst company-graphql-schema-introspect-buffer "*Company-GraphQL-Introspection*"
+  "Introspection Buffer.")
 
-(defconst company-graphql-temp-buffer "*company-graphql*"
-  "Schema Argument.")
+(defconst company-graphql-file-name-base (file-name-directory load-file-name)
+  "Package basename for `expand-file-name'.")
 
-(defconst company-graphql-schema-introspect-query "
-    query IntrospectionQuery {
-      __schema {
-        queryType {
-           name
-        }
-        mutationType {
-            name
-        }
-        subscriptionType {
-            name
-        }
-        types {
-            ...FullType
-        }
-        directives {
-            name
-            description
-            locations
-            args {
-              ...InputValue
-            }
-        }
-      }
-  }
+(defconst company-graphql-temp-buffer "*Company-GraphQL-Temp*"
+  "Temporary Buffer for various operations.")
 
-  fragment FullType on __Type {
-      kind
-      name
-      description
-      fields(includeDeprecated: true) {
-        name
-        description
-        args {
-            ...InputValue
-        }
-        type {
-            ...TypeRef
-        }
-        isDeprecated
-        deprecationReason
-      }
-      inputFields {
-        ...InputValue
-      }
-      interfaces {
-        ...TypeRef
-      }
-      enumValues(includeDeprecated: true) {
-        name
-        description
-        isDeprecated
-        deprecationReason
-      }
-      possibleTypes {
-        ...TypeRef
-      }
-  }
-
-  fragment InputValue on __InputValue {
-      name
-      description
-      type {
-        ...TypeRef
-      }
-      defaultValue
-  }
-
-  fragment TypeRef on __Type {
-      kind
-      name
-      ofType {
-        kind
-        name
-        ofType {
-            kind
-            name
-            ofType {
-              kind
-              name
-              ofType {
-                  kind
-                  name
-                  ofType {
-                    kind
-                    name
-                    ofType {
-                        kind
-                        name
-                        ofType {
-                          kind
-                          name
-                        }
-                    }
-                  }
-              }
-            }
-        }
-      }
-  }"
-  "Introspection query to the graphql server")
-
-(defvar-local company-graphql-schema-types-cache nil
-  "Company Candidates Cache.")
+(defvar-local company-graphql-schema-introspect-query nil
+  "Introspection query to the graphql server.")
 
 (defvar-local company-graphql-schema-url nil
   "URL address of the graphql server, which will to __schema introspection.")
 
+(defvar-local company-graphql-schema-types-cache nil
+  "Company Candidates Cache.")
+
+(defun company-graphql-file-name (file)
+  "Read FILE inside the package."
+  (expand-file-name file company-graphql-file-name-base))
+
 (defun company-graphql-init ()
-  "Init Setting for GraphQL server"
+  "Init Setting for GraphQL server."
   (interactive)
-  (setq company-graphql-schema-types-cache nil)
-  (setq company-graphql-schema-url (read-string "GraphQL URL: "))
-  (company-graphql-introspection)
-  (company-graphql-schema-types)
-  )
+  (or company-graphql-schema-types-cache
+      (progn
+	(setq company-graphql-schema-introspect-query (company-graphql-schema-introspect-content))
+	(setq company-graphql-schema-types-cache nil)
+	(setq company-graphql-schema-url (or graphql-url (read-string "GraphQL URL: ")))
+	(company-graphql-introspection)
+	(company-graphql-schema-types)
+	t)))
+
+(defun company-graphql-schema-introspect-content ()
+  "Read the content of introspection graphql file."
+  (with-temp-buffer
+    ;;(replace-regexp-in-string "[^/]+$" "introspection.graphql" (expand-file-name "./company-grahql.el"))
+    (insert-file-contents (company-graphql-file-name "introspection.graphql"))
+      (buffer-string)))
 
 (defun company-graphql-introspection ()
   "Setup company graphql mode with server url, introspection graphql, and json schema."
@@ -198,7 +127,7 @@
     (message response-buffer)))
 
 (defun company-graphql-jsonify-hashtable (&optional hashtable buffer-name)
-  "Debug json"
+  "Debug json given HASHTABLE and BUFFER-NAME."
   (let ((table (or hashtable company-graphql-schema-types-cache))
 	(buffer (or buffer-name company-graphql-temp-buffer)))
     (and table
@@ -211,7 +140,7 @@
 	     )))))
 
 (defun company-graphql-schema-type (hashtables parent)
-  "Get hashtables."
+  "Get a hashtable HASHTABLES of key PARENT."
   (let ((type (cl-find-if
 	       (lambda (hashtable)
 		 (let ((name (gethash "name" hashtable)))
@@ -220,13 +149,13 @@
     type))
 
 (defun company-graphql-schema-type-field-name (field)
-  "Get the type without container [] nor constrianted !."
+  "Get the type of FIELD without container [] nor constrianted !."
   (or (and (gethash "type" field)  (gethash "name" (gethash "type" field)))
       (and (gethash "type" field)  (gethash "name" (gethash "ofType" (gethash "type" field))))
       nil))
 
 (defun company-graphql-schema-type-fields (hashtable)
-  "List of (Field . Type) Pairs. where Field has :annotation and :meta"
+  "List of (Field . Type) Pairs of given HASHTABLE, where Field has :annotation and :meta."
   (let ((fields '())
 	(names '()))
     (push (gethash "fields" hashtable) fields)
@@ -238,9 +167,9 @@
 	(push (cons name annotation) names)))
     names))
 
-(defun company-graphql-schema-visit-dfs (items)
-  "Visit the lookup table in DFS manner and print each field."
-  (dolist (item items)
+(defun company-graphql-schema-visit-dfs (hashtable)
+  "Visit the lookup table HASHTABLE in DFS manner and print each field."
+  (dolist (item hashtable)
     (let ((name (gethash "name" item))
 	  (fields (gethash "fields" item))
 	  (keys '()))
@@ -257,7 +186,7 @@
       fields)))
 
 (defun company-graphql-schema-add-subroot (schema type name)
-  "Make operation into type."
+  "Make operation into type given SCHEMA, TYPE, and NAME."
   (let* ((operation-type (gethash type schema))
 	 (operation (make-hash-table :test 'equal)))
     (and operation-type
@@ -270,7 +199,7 @@
 	   operation))))
 
 (defun company-graphql-schema-add-root (schema)
-  "Make operation into type."
+  "Make operation SCHEMA into type."
   (let ((operations '())
 	(query (company-graphql-schema-add-subroot
 		schema "queryType" "query"))
@@ -290,11 +219,11 @@
       root)))
 
 (defun company-graphql-schema-name-arg (name)
-  "Return a name.arg string"
+  "Return a name.arg string from NAME."
   (format "%s.%s" name company-graphql-schema-args))
 
 (defun company-graphql-schema-add-arg-detail (schema type)
-  "Add args detail"
+  "Add args detail of SCHEMA and TYPE."
   (let* ((types (gethash "types" schema))
 	 (type-def (company-graphql-schema-type types type))
 	 (type-fields (and type-def (gethash "fields" type-def))))
@@ -309,7 +238,7 @@
      type-fields)))
 
 (defun company-graphql-schema-add-arg-list (schema)
-  "Add Query, Mutation, Subscription args."
+  "Add Query, Mutation, Subscription args of SCHEMA."
   (let ((query (company-graphql-schema-add-arg-detail schema "Query"))
 	(mutation (company-graphql-schema-add-arg-detail schema "Mutation"))
 	(subscription (company-graphql-schema-add-arg-detail schema "Subscription"))
@@ -328,7 +257,7 @@
   )
 
 (defun company-graphql-schema-types ()
-  "Parse GraphQL data.__schema.types JSON into hashtable"
+  "Parse GraphQL data.__schema.types JSON into hashtable."
   (or company-graphql-schema-types-cache
       (set 'company-graphql-schema-types-cache
 	   (let* ((json-object-type 'hash-table)
@@ -348,7 +277,7 @@
 	       types)))))
 
 (defun company-graphql-path-head ()
-  "Path root, query, mutation, subscription, where anynomous is query"
+  "Path root, query, mutation, subscription, where anynomous is query."
   (let ((op company-graphql-schema-root)
 	(name nil)
 	(begin (point))
@@ -372,7 +301,7 @@
     (list op name)))
 
 (defun company-graphql-path-lexemify (long-string)
-  "Lexemify sub-expression into partial grammar"
+  "Lexemify LONG-STRING sub-expression into partial grammar."
   (let ((sub-list
          (-remove
           (lambda (str) (s-blank? str))
@@ -392,7 +321,7 @@
     sub-list))
 
 (defun company-graphql-schema-hashtable (&optional root)
-  "Get GraphQL schema fields hashtable."
+  "Get GraphQL schema fields hashtable ROOT."
   (company-graphql-schema-type-fields
    (company-graphql-schema-type
     (company-graphql-schema-types)
@@ -425,7 +354,7 @@
       last-substrings)))
 
 (defun company-graphql-path-get-type (name lookup)
-  "Zip given name with its GraphQL type."
+  "Zip given NAME and LOOKUP with its GraphQL type."
   (let* ((type (or (cdr (assoc name lookup))
 		   (and (string-suffix-p company-graphql-schema-args name) name)))
 	 (ans (cons name type)))
@@ -433,7 +362,7 @@
     (cons ans lookup)))
 
 (defun company-graphql-path-types (&optional path-names)
-  "Build name and type pair for a given path."
+  "Build name and type pair for a given PATH-NAMES."
   (let ((table (company-graphql-schema-hashtable))
 	(name-types '())
 	(path (or path-names (company-graphql-path-names))))
@@ -451,16 +380,16 @@
   (company-grab-symbol-cons "\\.\\|->" 1))
 
 (defun company-graphql-annotation (candidate)
-  "Company-GraphQL Annotation."
+  "Company-GraphQL Annotation for a given CANDIDATE."
   (format " %s" (get-text-property 0 :annotation candidate)))
 
 (defun company-graphql-meta (candidate)
-  "Company-GraphQL Meta."
+  "Company-GraphQL Meta for a given CANDIDATE."
   ;; TBD
   (format "" (get-text-property 0 :meta candidate)))
 
 (defun company-graphql-candidates (prefix)
-  "Company-GraphQL Candidates"
+  "Company-GraphQL Candidates PREFIX."
   (let* ((text (substring-no-properties prefix))
 	 (path (company-graphql-path-names))
 	 (tail (cdr (car (reverse (company-graphql-path-types path)))))
@@ -474,16 +403,18 @@
     answer))
 
 (defun company-graphql (command &optional arg &rest ignored)
-  "Company-GraphQL entry command."
+  "Company-GraphQL entry COMMAND, ARG, and IGNORED."
   (interactive (list 'interactive))
-  (cl-case command
-    (interactive (company-begin-backend 'company-graphql))
-    (prefix (company-graphql-prefix))
-    (candidates (company-graphql-candidates arg))
-    (annotation (company-graphql-annotation arg))
-    (meta (company-graphql-meta arg))
-    (ignore-case t)
-    (no-cache t)))
+  (and (company-graphql-init)
+       (not (null company-graphql-schema-types-cache))
+       (cl-case command
+	 (interactive (company-begin-backend 'company-graphql))
+	 (prefix (company-graphql-prefix))
+	 (candidates (company-graphql-candidates arg))
+	 (annotation (company-graphql-annotation arg))
+	 (meta (company-graphql-meta arg))
+	 (ignore-case t)
+	 (no-cache t))))
 
 (provide 'company-graphql)
 ;;; company-graphql.el ends here
