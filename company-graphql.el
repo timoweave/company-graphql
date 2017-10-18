@@ -3,10 +3,10 @@
 ;; Copyright (C) 2017 Timothy Shiu
 
 ;; Author: Timothy Shiu <timoweave@gmail.com>
-;; Version: 20171017.1
+;; Version: 0.1.0
 ;; Keywords: company, graphql, completion, introspection
 ;; URL: https://github.com/timoweave/company-graphql
-;; Package-Requires: ((emacs "25.2.1") (dash "20170924.2240") (s "20170922.900") (company "0.9.4") (request "20170131.1747") (graphql-mode "20170929.4"))
+;; Package-Requires: ((emacs "25.2.1") (cl-lib "0.5.0") (dash "2.13.0") (s "1.19.0") (company "0.9.4") (request "0.3.0") (graphql-mode "20170929.4"))
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -37,8 +37,7 @@
 
 ;;; Code:
 
-(require 'json)
-(require 'subr-x)
+(require 'cl-lib)
 (require 's)
 (require 'dash)
 (require 'request)
