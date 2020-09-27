@@ -112,12 +112,13 @@
 				       (not (string-equal query-operation-name "")))
 				  (format "?operationName=%s" query-operation-name)
 				"")))))
+	 (headers (append '(("Content-Type" . "application/json")) graphql-extra-headers))
 	 (response-result
 	  (request company-graphql-schema-url
 		   :type "POST"
 		   :params request-list
 		   :data (json-encode request-list)
-		   :headers '(("Content-Type" . "application/json"))
+		   :headers headers
 		   :parser 'json-read
 		   :sync t
 		   :complete response-complete
