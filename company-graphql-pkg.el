@@ -10,6 +10,4 @@
     (company "0.9.4")
     (request "0.3.0")
     (graphql-mode "20170929.4"))
-    )
-  :keywords '("company" "graphql" "completion" "introspection")
-  )
+  :keywords '("company" "graphql" "completion" "introspection"))
